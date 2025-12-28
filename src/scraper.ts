@@ -150,84 +150,103 @@ const AREA_FILTERS: Record<string, string[]> = {
  * Aplica filtros clicando nos elementos da página
  */
 async function applyFilters(page: Page, filters: FilterParams): Promise<void> {
-  console.log('📋 Aplicando filtros interativamente...');
+  console.log('📋 Aplicando filtros usando busca rápida...');
 
-  // Aguardar página carregar
-  await page.waitForLoadState('domcontentloaded');
+  // 1. Abrir formulário de filtros (se estiver fechado)
+  console.log('🔓 Abrindo formulário de filtros...');
+  try {
+    const filterToggleBtn = page.locator('#filter-form-toggle-btn, .js-filter-form-toggle-btn');
+    if (await filterToggleBtn.isVisible({ timeout: 2000 })) {
+      await filterToggleBtn.click();
+      await page.waitForTimeout(1000);
+      console.log('  ✓ Formulário aberto');
+    }
+  } catch (e) {
+    console.log('  ⚠ Toggle não encontrado, formulário já deve estar aberto');
+  }
+
+  await page.waitForSelector('#js-questions-filter-form', { timeout: 10000 });
   await page.waitForTimeout(2000);
 
-  // 1. Aplicar filtros de área (clicar em checkboxes de órgãos)
-  if (filters.area && AREA_FILTERS[filters.area]) {
-    console.log(`🎯 Selecionando filtros da área: ${filters.area}`);
+  // Função auxiliar para selecionar filtro usando busca rápida
+  async function selectFilter(filterLabel: string, value: string): Promise<boolean> {
+    try {
+      console.log(`  🔍 Selecionando ${filterLabel}: ${value}`);
 
-    const areaKeywords = AREA_FILTERS[filters.area];
-
-    for (const keyword of areaKeywords) {
-      try {
-        // Procurar por checkboxes ou labels que contenham a palavra-chave no filtro de órgãos
-        const selector = `label:has-text("${keyword}"), input[type="checkbox"][value*="${keyword}"]`;
-        const element = await page.locator(selector).first();
-
-        if (await element.isVisible({ timeout: 1000 })) {
-          await element.click();
-          console.log(`  ✓ Clicado em: ${keyword}`);
-          await page.waitForTimeout(500);
-        }
-      } catch (e) {
-        console.log(`  ⚠ Não encontrado: ${keyword}`);
+      // 1. Clicar no dropdown que contém o label
+      const dropdownToggle = page.locator(`button.dropdown-toggle:has-text("${filterLabel}")`).first();
+      if (await dropdownToggle.isVisible({ timeout: 2000 })) {
+        await dropdownToggle.click();
+        await page.waitForTimeout(500);
+      } else {
+        console.log(`    ⚠ Dropdown "${filterLabel}" não encontrado`);
+        return false;
       }
+
+      // 2. Digitar no campo de busca rápida
+      const searchInput = page.locator('.dropdown-menu.open input[type="text"], .dropdown-menu.show input[type="text"]').first();
+      if (await searchInput.isVisible({ timeout: 1000 })) {
+        await searchInput.fill(value);
+        await page.waitForTimeout(800);
+        console.log(`    ✓ Digitado "${value}" na busca`);
+      }
+
+      // 3. Clicar no primeiro checkbox/opção que aparece
+      const firstOption = page.locator('.dropdown-menu.open li, .dropdown-menu.show li').first();
+      if (await firstOption.isVisible({ timeout: 1000 })) {
+        await firstOption.click();
+        await page.waitForTimeout(500);
+        console.log(`    ✓ ${filterLabel} "${value}" selecionado`);
+        return true;
+      }
+
+      console.log(`    ⚠ Nenhuma opção encontrada para "${value}"`);
+      return false;
+    } catch (e) {
+      console.log(`    ⚠ Erro ao selecionar ${filterLabel}: ${e}`);
+      return false;
     }
   }
 
-  // 2. Aplicar filtro de ano
+  // Aplicar filtros se fornecidos
   if (filters.ano) {
-    console.log(`📅 Selecionando ano: ${filters.ano}`);
-    try {
-      const yearSelector = `label:has-text("${filters.ano}"), input[value="${filters.ano}"]`;
-      await page.locator(yearSelector).first().click({ timeout: 2000 });
-      await page.waitForTimeout(500);
-    } catch (e) {
-      console.log(`  ⚠ Ano ${filters.ano} não encontrado`);
-    }
+    console.log(`📅 Filtrando por ano: ${filters.ano}`);
+    await selectFilter('Ano', filters.ano.toString());
   }
 
-  // 3. Aplicar filtro de UF
-  if (filters.uf) {
-    console.log(`🗺️ Selecionando UF: ${filters.uf}`);
-    try {
-      const ufSelector = `label:has-text("${filters.uf}"), input[value="${filters.uf}"]`;
-      await page.locator(ufSelector).first().click({ timeout: 2000 });
-      await page.waitForTimeout(500);
-    } catch (e) {
-      console.log(`  ⚠ UF ${filters.uf} não encontrada`);
-    }
-  }
-
-  // 4. Aplicar filtro de banca
   if (filters.banca) {
-    console.log(`🏢 Selecionando banca: ${filters.banca}`);
-    try {
-      const bancaSelector = `label:has-text("${filters.banca}"), input[value="${filters.banca}"]`;
-      await page.locator(bancaSelector).first().click({ timeout: 2000 });
-      await page.waitForTimeout(500);
-    } catch (e) {
-      console.log(`  ⚠ Banca ${filters.banca} não encontrada`);
-    }
+    console.log(`🏢 Filtrando por banca: ${filters.banca}`);
+    await selectFilter('Banca', filters.banca);
   }
 
-  // 5. Clicar no botão "Filtrar" ou "Aplicar"
-  console.log('🔍 Aplicando filtros...');
+  if (filters.uf) {
+    console.log(`🗺️ Filtrando por UF: ${filters.uf}`);
+    await selectFilter('UF', filters.uf);
+  }
+
+  // Clicar no botão Filtrar
+  console.log('🔍 Clicando no botão Filtrar...');
   try {
-    const filterButton = await page.locator('button:has-text("Filtrar"), button:has-text("Aplicar"), button[type="submit"]').first();
-    await filterButton.click({ timeout: 3000 });
-    console.log('  ✓ Botão de filtrar clicado');
+    const filterButton = page.locator('button[type="submit"]:has-text("Filtrar")').first();
 
-    // Aguardar a página recarregar com os filtros
-    await page.waitForLoadState('networkidle', { timeout: 10000 });
-    await page.waitForTimeout(2000);
+    if (await filterButton.isVisible({ timeout: 3000 })) {
+      await filterButton.click();
+      console.log('  ✓ Botão Filtrar clicado');
+
+      // Aguardar navegação/reload
+      await page.waitForLoadState('load', { timeout: 20000 });
+      await page.waitForTimeout(2000);
+      console.log('  ✓ Página recarregada');
+    } else {
+      console.log('  ⚠ Botão não visível, tentando submit direto');
+      await page.locator('#js-questions-filter-form').evaluate((form: any) => form.submit());
+      await page.waitForLoadState('load', { timeout: 20000 });
+    }
   } catch (e) {
-    console.log('  ⚠ Botão de filtrar não encontrado ou não necessário');
+    console.log(`  ⚠ Erro ao submeter: ${e}`);
   }
+
+  console.log('✅ Filtros aplicados!');
 }
 
 async function extractQuestions(page: Page): Promise<Question[]> {
