@@ -96,18 +96,138 @@ async function getLoggedContext(): Promise<BrowserContext> {
   }
 }
 
-function buildUrl(filters: FilterParams): string {
-  const baseUrl = 'https://www.qconcursos.com/questoes-de-concursos/questoes';
-  const params = new URLSearchParams();
+/**
+ * Mapeamento de áreas para filtros do QConcursos
+ */
+const AREA_FILTERS: Record<string, string[]> = {
+  'fiscal': [
+    'SEFAZ',
+    'Secretaria da Fazenda',
+    'Receita Federal',
+    'ISS',
+    'ICMS',
+    'Tributos',
+    'Auditoria Fiscal'
+  ],
+  'tribunais': [
+    'Tribunal de Justiça',
+    'Tribunal Regional Federal',
+    'Tribunal Regional do Trabalho',
+    'Tribunal de Contas',
+    'Ministério Público',
+    'TJ',
+    'TRF',
+    'TRT'
+  ],
+  'policial': [
+    'Polícia Federal',
+    'Polícia Rodoviária Federal',
+    'Polícia Civil',
+    'Polícia Militar',
+    'Perito Criminal',
+    'PRF',
+    'PF'
+  ],
+  'bancaria': [
+    'Banco do Brasil',
+    'Caixa Econômica Federal',
+    'Bancos Estaduais',
+    'BNB',
+    'BASA',
+    'Caixa'
+  ],
+  'controle': [
+    'Tribunal de Contas da União',
+    'Tribunal de Contas',
+    'Controladoria',
+    'Auditoria',
+    'TCU',
+    'TCE'
+  ]
+};
 
-  if (filters.banca) params.append('banca', filters.banca);
-  if (filters.orgao) params.append('orgao', filters.orgao);
-  if (filters.ano) params.append('ano', filters.ano.toString());
-  if (filters.disciplina) params.append('disciplina', filters.disciplina);
-  if (filters.page) params.append('page', filters.page.toString());
+/**
+ * Aplica filtros clicando nos elementos da página
+ */
+async function applyFilters(page: Page, filters: FilterParams): Promise<void> {
+  console.log('📋 Aplicando filtros interativamente...');
 
-  const queryString = params.toString();
-  return queryString ? `${baseUrl}?${queryString}` : baseUrl;
+  // Aguardar página carregar
+  await page.waitForLoadState('domcontentloaded');
+  await page.waitForTimeout(2000);
+
+  // 1. Aplicar filtros de área (clicar em checkboxes de órgãos)
+  if (filters.area && AREA_FILTERS[filters.area]) {
+    console.log(`🎯 Selecionando filtros da área: ${filters.area}`);
+
+    const areaKeywords = AREA_FILTERS[filters.area];
+
+    for (const keyword of areaKeywords) {
+      try {
+        // Procurar por checkboxes ou labels que contenham a palavra-chave no filtro de órgãos
+        const selector = `label:has-text("${keyword}"), input[type="checkbox"][value*="${keyword}"]`;
+        const element = await page.locator(selector).first();
+
+        if (await element.isVisible({ timeout: 1000 })) {
+          await element.click();
+          console.log(`  ✓ Clicado em: ${keyword}`);
+          await page.waitForTimeout(500);
+        }
+      } catch (e) {
+        console.log(`  ⚠ Não encontrado: ${keyword}`);
+      }
+    }
+  }
+
+  // 2. Aplicar filtro de ano
+  if (filters.ano) {
+    console.log(`📅 Selecionando ano: ${filters.ano}`);
+    try {
+      const yearSelector = `label:has-text("${filters.ano}"), input[value="${filters.ano}"]`;
+      await page.locator(yearSelector).first().click({ timeout: 2000 });
+      await page.waitForTimeout(500);
+    } catch (e) {
+      console.log(`  ⚠ Ano ${filters.ano} não encontrado`);
+    }
+  }
+
+  // 3. Aplicar filtro de UF
+  if (filters.uf) {
+    console.log(`🗺️ Selecionando UF: ${filters.uf}`);
+    try {
+      const ufSelector = `label:has-text("${filters.uf}"), input[value="${filters.uf}"]`;
+      await page.locator(ufSelector).first().click({ timeout: 2000 });
+      await page.waitForTimeout(500);
+    } catch (e) {
+      console.log(`  ⚠ UF ${filters.uf} não encontrada`);
+    }
+  }
+
+  // 4. Aplicar filtro de banca
+  if (filters.banca) {
+    console.log(`🏢 Selecionando banca: ${filters.banca}`);
+    try {
+      const bancaSelector = `label:has-text("${filters.banca}"), input[value="${filters.banca}"]`;
+      await page.locator(bancaSelector).first().click({ timeout: 2000 });
+      await page.waitForTimeout(500);
+    } catch (e) {
+      console.log(`  ⚠ Banca ${filters.banca} não encontrada`);
+    }
+  }
+
+  // 5. Clicar no botão "Filtrar" ou "Aplicar"
+  console.log('🔍 Aplicando filtros...');
+  try {
+    const filterButton = await page.locator('button:has-text("Filtrar"), button:has-text("Aplicar"), button[type="submit"]').first();
+    await filterButton.click({ timeout: 3000 });
+    console.log('  ✓ Botão de filtrar clicado');
+
+    // Aguardar a página recarregar com os filtros
+    await page.waitForLoadState('networkidle', { timeout: 10000 });
+    await page.waitForTimeout(2000);
+  } catch (e) {
+    console.log('  ⚠ Botão de filtrar não encontrado ou não necessário');
+  }
 }
 
 async function extractQuestions(page: Page): Promise<Question[]> {
@@ -247,20 +367,33 @@ export async function scrapeQuestoes(filters: FilterParams = {}): Promise<Scrape
   const page = await context.newPage();
 
   try {
-    const url = buildUrl(filters);
-    console.log('Acessando:', url);
+    console.log('🌐 Acessando página de questões...');
+    let baseUrl = 'https://www.qconcursos.com/questoes-de-concursos/questoes';
+    // Adicionar paginacao se fornecida
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    if (filters.page && filters.page > 1) {
+      baseUrl += "?page=" + filters.page;
+      console.log("📄 Acessando pagina " + filters.page);
+    }
+
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    console.log('✅ Página carregada');
+
+    // Aplicar filtros interativamente
+    await applyFilters(page, filters);
+
+    // Aguardar questões carregarem
     await page.waitForSelector('.q-question-belt[data-question-id]', { timeout: 15000 });
-    console.log('Questões carregadas');
+    console.log('✅ Questões carregadas');
 
     const questions = await extractQuestions(page);
     const meta = await extractMeta(page);
 
-    console.log(`Extraídas ${questions.length} questões`);
+    console.log(`📊 Extraídas ${questions.length} questões`);
     return { questions, meta };
+
   } catch (error: any) {
-    console.error('Erro no scraping:', error.message);
+    console.error('❌ Erro no scraping:', error.message);
     await page.screenshot({ path: 'debug-error-screenshot.png', fullPage: true });
     const html = await page.content();
     const fs = await import('fs');
@@ -297,66 +430,104 @@ export async function scrapeProvaById(id: string): Promise<ScrapeResult> {
   }
 }
 
+/**
+ * FUNÇÃO CORRIGIDA: Lista provas com extração de links de download
+ */
 export async function listarProvas(filters: FilterParams = {}): Promise<any> {
   const context = await getLoggedContext();
   const page = await context.newPage();
 
   try {
     const baseUrl = 'https://www.qconcursos.com/questoes-de-concursos/provas';
-    const params = new URLSearchParams();
+    console.log('Acessando lista de provas:', baseUrl);
 
-    if (filters.banca) params.append('banca', filters.banca);
-    if (filters.orgao) params.append('orgao', filters.orgao);
-    if (filters.ano) params.append('ano', filters.ano.toString());
-    if (filters.page) params.append('page', filters.page.toString());
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    const url = params.toString() ? `${baseUrl}?${params.toString()}` : baseUrl;
-    console.log('Acessando lista de provas:', url);
+    // Aplicar filtros interativamente
+    await applyFilters(page, filters);
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-    // CORREÇÃO: Usar seletor correto .q-exam-item ao invés de [data-prova-id]
+    // Aguardar elementos de prova carregarem
     console.log('Aguardando elementos de prova (.q-exam-item)...');
     await page.waitForSelector('.q-exam-item', { timeout: 15000 });
     console.log('✅ Elementos de prova carregados!');
-
-    // Debug: salvar HTML e screenshot
-    await page.screenshot({ path: 'debug_provas.png', fullPage: true });
-    const html = await page.content();
-    const fs = await import('fs');
-    fs.writeFileSync('debug_provas.html', html);
-    console.log('Debug files salvos: debug_provas.png e debug_provas.html');
 
     const provas = await page.evaluate(() => {
       const provaElements = document.querySelectorAll('.q-exam-item');
       const results: any[] = [];
 
       provaElements.forEach((el) => {
-        const titleElement = el.querySelector('.q-title');
-        const linkElement = el.querySelector('a[href*="/provas/"]');
-        const dateElement = el.querySelector('.q-date');
-        const levelElement = el.querySelector('.q-level');
+        // ✅ CORREÇÃO 1: Extrair do container correto
+        const containerEl = el.querySelector('.q-exam-item-container');
+        if (!containerEl) return;
+
+        // ✅ CORREÇÃO 2: Extrair título e link corretamente
+        const titleElement = containerEl.querySelector('.q-title');
+        const linkElement = containerEl.querySelector('a[href*="/provas/"]');
+        const dateElement = containerEl.querySelector('.q-date');
+        const levelElement = containerEl.querySelector('.q-level');
 
         const title = titleElement?.textContent?.trim() || '';
         const href = linkElement?.getAttribute('href') || '';
         const date = dateElement?.textContent?.replace('Aplicada em ', '').trim() || '';
         const level = levelElement?.textContent?.trim() || '';
 
-        // Extrair banca, ano, órgão do título
-        // Formato: "BANCA - ANO - ÓRGÃO - CARGO"
-        const parts = title.split(' - ');
-        const ano = parseInt(parts[1]) || new Date().getFullYear();
+        // ✅ CORREÇÃO 3: Extrair ID correto do dropdown de download
+        let examId = '';
+        const downloadButton = el.querySelector('button[id^="download-"]');
+        if (downloadButton) {
+          const buttonId = downloadButton.getAttribute('id') || '';
+          examId = buttonId.replace('download-', '');
+        }
+
+        // Fallback: extrair do href
+        if (!examId) {
+          examId = href.split('/').pop() || '';
+        }
+
+        // ✅ CORREÇÃO 4: Extrair banca, ano, órgão e cargo do título
+        // Formato: "CESPE / CEBRASPE - 2024 - SEFAZ-AC - Auditor da Receita Estadual"
+        const parts = title.split(' - ').map(p => p.trim());
+        const banca = parts[0] || '';
+        const ano = parts[1] ? parseInt(parts[1]) : new Date().getFullYear();
+        const orgao = parts[2] || '';
+        const cargo = parts.slice(3).join(' - ') || ''; // Resto é o cargo
+
+        // ✅ CORREÇÃO 5: Extrair links de download do dropdown
+        const downloads: any = {
+          prova: '',
+          gabarito: '',
+          edital: ''
+        };
+
+        const dropdownMenu = el.querySelector('.dropdown-menu');
+        if (dropdownMenu) {
+          const links = dropdownMenu.querySelectorAll('a[href*="arquivos.qconcursos.com"]');
+
+          links.forEach((link) => {
+            const href = link.getAttribute('href') || '';
+            const text = link.textContent?.trim().toLowerCase() || '';
+
+            if (text.includes('baixar prova')) {
+              downloads.prova = href;
+            } else if (text.includes('baixar gabarito')) {
+              downloads.gabarito = href;
+            } else if (text.includes('baixar edital')) {
+              downloads.edital = href;
+            }
+          });
+        }
 
         results.push({
-          id: href.split('/').pop() || '',
+          id: examId,
           titulo: title,
-          banca: parts[0] || '',
+          banca: banca,
           ano: ano,
-          orgao: parts[2] || '',
-          cargo: parts[3] || '',
+          orgao: orgao,
+          cargo: cargo,
           link: `https://www.qconcursos.com${href}`,
           dataAplicacao: date,
-          nivel: level
+          nivel: level,
+          downloads: downloads // ✅ NOVO: Links de download
         });
       });
 
@@ -365,10 +536,10 @@ export async function listarProvas(filters: FilterParams = {}): Promise<any> {
 
     console.log(`✅ Encontradas ${provas.length} provas`);
     return { provas };
+
   } catch (error: any) {
     console.error('❌ Erro ao listar provas:', error.message);
 
-    // Debug em caso de erro
     try {
       await page.screenshot({ path: 'debug-provas-error.png', fullPage: true });
       const html = await page.content();
